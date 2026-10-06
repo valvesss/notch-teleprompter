@@ -1,0 +1,162 @@
+<!doctype html>
+<meta charset="utf-8">
+<style>
+  :root { --size: 34px; --bar: 44px; }
+  html, body { margin: 0; height: 100%; background: transparent; overflow: hidden;
+    font-family: -apple-system, "SF Pro Display", Helvetica, sans-serif; color: #fff;
+    -webkit-user-select: none; cursor: default; }
+  #win { position: absolute; inset: 0; background: #000; border-radius: 0 0 20px 20px; overflow: hidden; }
+  /* O texto some aos poucos pra baixo: o olho fica na linha de cima, perto da câmera. */
+  #stage { position: absolute; left: 0; right: 0; top: 0; bottom: var(--bar); overflow: hidden;
+    -webkit-mask-image: linear-gradient(#000 0, #000 40%, rgba(0,0,0,.25) 100%); }
+  #text { position: absolute; left: 0; right: 0; top: 0; padding: 4px 32px 0; box-sizing: border-box;
+    font-size: var(--size); line-height: 1.32; font-weight: 600; white-space: pre-wrap; will-change: transform; }
+  #hud { position: absolute; right: 12px; bottom: calc(var(--bar) + 8px); font-size: 12px; color: #9a9a9a; background: #111;
+    padding: 4px 10px; border-radius: 10px; opacity: 0; transition: opacity .25s; pointer-events: none; }
+  #hud.on { opacity: 1; }
+  #ed { display: none; position: absolute; left: 0; right: 0; top: 0; bottom: var(--bar); width: 100%; box-sizing: border-box;
+    background: #111; color: #fff; border: 0; outline: 0; resize: none; padding: 16px 20px;
+    font: 16px/1.5 -apple-system, Helvetica, sans-serif; -webkit-user-select: text; cursor: text; }
+
+  /* Barra de controles, abaixo da área de leitura */
+  #bar { position: absolute; left: 0; right: 0; bottom: 0; height: var(--bar); box-sizing: border-box;
+    display: flex; align-items: center; gap: 14px; padding: 0 18px; background: #1a1a1c;
+    border-top: 1px solid #2c2c2e; font-size: 12px; color: #a1a1a6; white-space: nowrap; }
+  #bar button { all: unset; cursor: pointer; display: grid; place-items: center; min-width: 28px; height: 28px;
+    padding: 0 8px; box-sizing: border-box; border-radius: 8px; background: #2c2c2e; color: #fff; font-size: 13px; }
+  #bar button:hover { background: #3a3a3c; }
+  #bar button.on { background: #0a84ff; }
+  #bar label { display: flex; align-items: center; gap: 6px; }
+  #bar b { min-width: 22px; color: #fff; font-weight: 600; font-variant-numeric: tabular-nums; }
+  #bar input[type=range] { width: 84px; accent-color: #0a84ff; cursor: pointer; margin: 0; }
+  #bar .sp { flex: 1; }
+</style>
+<div id="win">
+  <div id="stage"><div id="text"></div></div>
+  <div id="hud"></div>
+  <textarea id="ed" spellcheck="false" placeholder="Cole o roteiro aqui. Esc salva e volta."></textarea>
+  <div id="bar">
+    <button id="bPlay" title="Play / pause (Espaço)">▶</button>
+    <button id="bReset" title="Voltar ao início (R)">⏮</button>
+    <label>Velocidade <input id="rSpeed" type="range" min="1" max="30"><b id="vSpeed"></b></label>
+    <label>Texto <input id="rSize" type="range" min="16" max="90" step="2"><b id="vSize"></b></label>
+    <label>Altura <input id="rH" type="range" min="80" max="700" step="10"><b id="vH"></b></label>
+    <label>Largura <input id="rW" type="range" min="560" max="2400" step="20"><b id="vW"></b></label>
+    <span class="sp"></span>
+    <button id="bEdit" title="Editar roteiro (E)">Roteiro</button>
+    <button id="bCap" title="Aparecer em gravação / compartilhamento de tela (C)">Oculto</button>
+    <button id="bQuit" title="Sair (Esc)">✕</button>
+  </div>
+</div>
+<script>
+const $ = (id) => document.getElementById(id);
+const post = (m) => webkit.messageHandlers.tp.postMessage(m);
+const BAR = 44;
+const S = { speed: 5, size: 34, w: 760, h: 150 };  // velocidade 1–30 (×4 px/s)
+let y = 0, playing = false, editing = false, last = 0, hudTimer, capture = false, saveTimer;
+
+function init(cfg, script) {
+  Object.assign(S, cfg);
+  S.w = Math.max(S.w, 560);
+  $("ed").value = script || "Cole seu roteiro aqui.\n\nE = editar roteiro\nEspaço = play/pause\n↑ ↓ = velocidade\n− = texto menor · = = texto maior\n[ ] = altura da janela · , . = largura\nR = voltar ao início\nC = aparecer em gravação de tela\nEsc = sair";
+  frame(); layout();
+  hud("Espaço ▶ · ↑↓ velocidade · − = texto · [ ] , . janela · E editar · Esc sair", 6000);
+}
+
+const frame = (h = S.h) => post({ type: "frame", w: S.w, h: h + BAR });
+const maxY = () => Math.max(0, $("text").offsetHeight - S.size * 1.32);
+function layout() {
+  document.documentElement.style.setProperty("--size", S.size + "px");
+  $("text").textContent = $("ed").value.trim() + "\n\n\n";
+  y = Math.min(y, maxY()); render(); sync();
+}
+const render = () => ($("text").style.transform = `translate3d(0,${-y}px,0)`);
+function sync() {
+  for (const [k, v] of [["Speed", S.speed], ["Size", S.size], ["H", S.h], ["W", S.w]]) {
+    $("r" + k).value = v; $("v" + k).textContent = v;
+  }
+  $("bPlay").textContent = playing ? "❚❚" : "▶";
+  $("bPlay").classList.toggle("on", playing);
+  $("bEdit").classList.toggle("on", editing);
+  $("bCap").textContent = capture ? "Visível" : "Oculto";
+  $("bCap").classList.toggle("on", capture);
+}
+
+function hud(msg, ms = 1400) {
+  $("hud").textContent = msg; $("hud").classList.add("on");
+  clearTimeout(hudTimer); hudTimer = setTimeout(() => $("hud").classList.remove("on"), ms);
+}
+function save(withScript) {
+  clearTimeout(saveTimer);
+  saveTimer = setTimeout(() => post({ type: "save", cfg: S, script: withScript ? $("ed").value : undefined }), 300);
+}
+const clamp = (v, a, b) => Math.min(b, Math.max(a, v));
+
+function tick(t) {
+  if (playing) {
+    y += S.speed * 4 * Math.min((t - last) / 1000, 0.05);
+    if (y >= maxY()) { y = maxY(); playing = false; hud("fim"); sync(); }
+    render();
+  }
+  last = t; requestAnimationFrame(tick);
+}
+requestAnimationFrame(tick);
+
+function setEditing(on) {
+  editing = on; playing = false;
+  $("ed").style.display = on ? "block" : "none";
+  if (on) { frame(480); $("ed").focus(); }
+  else { layout(); frame(); save(true); }
+  sync();
+}
+function togglePlay() { playing = !playing; sync(); hud(playing ? "▶" : "❚❚", 600); }
+function reset() { y = 0; playing = false; render(); sync(); }
+function toggleCapture() { capture = !capture; post({ type: "capture", on: capture }); sync(); hud(capture ? "aparece em gravação de tela" : "escondido de gravação de tela", 2000); }
+
+// Ações compartilhadas entre teclado e barra
+const act = {
+  speed: (v) => { S.speed = clamp(v, 1, 30); sync(); },
+  size: (v) => { S.size = clamp(v, 16, 90); layout(); },
+  h: (v) => { S.h = clamp(v, 80, 700); frame(); layout(); },
+  w: (v) => { S.w = clamp(v, 560, 2400); frame(); sync(); },
+};
+
+// Barra de controles
+$("rSpeed").oninput = (e) => { act.speed(+e.target.value); save(false); };
+$("rSize").oninput = (e) => { act.size(+e.target.value); save(false); };
+$("rH").oninput = (e) => { act.h(+e.target.value); save(false); };
+$("rW").oninput = (e) => { act.w(+e.target.value); save(false); };
+$("bPlay").onclick = togglePlay;
+$("bReset").onclick = reset;
+$("bEdit").onclick = () => setEditing(!editing);
+$("bCap").onclick = toggleCapture;
+$("bQuit").onclick = () => post({ type: "quit" });
+// Tira o foco dos controles depois do uso, senão Espaço/setas agem no botão/slider.
+$("bar").addEventListener("change", () => document.activeElement.blur());
+$("bar").addEventListener("click", () => { if (document.activeElement !== $("ed")) document.activeElement.blur(); });
+$("bar").addEventListener("pointerup", () => setTimeout(() => document.activeElement.blur(), 0));
+
+addEventListener("wheel", (e) => { if (!editing) { y = clamp(y + e.deltaY, 0, maxY()); render(); } }, { passive: true });
+addEventListener("keydown", (e) => {
+  if (e.metaKey) return;
+  if (editing) { if (e.key === "Escape") setEditing(false); return; }
+  const k = e.key;
+  if (k === " ") togglePlay();
+  else if (k === "ArrowUp") { act.speed(S.speed + 1); hud("velocidade " + S.speed); }
+  else if (k === "ArrowDown") { act.speed(S.speed - 1); hud("velocidade " + S.speed); }
+  else if (k === "=" || k === "+") { act.size(S.size + 2); hud("texto " + S.size); }
+  else if (k === "-") { act.size(S.size - 2); hud("texto " + S.size); }
+  else if (k === "]") act.h(S.h + 20);
+  else if (k === "[") act.h(S.h - 20);
+  else if (k === ".") act.w(S.w + 40);
+  else if (k === ",") act.w(S.w - 40);
+  else if (k === "PageDown") { y = clamp(y + S.size * 1.32 * 3, 0, maxY()); render(); }
+  else if (k === "PageUp") { y = clamp(y - S.size * 1.32 * 3, 0, maxY()); render(); }
+  else if (k === "r" || k === "R" || k === "Home") reset();
+  else if (k === "e" || k === "E") { setEditing(true); return; }
+  else if (k === "c" || k === "C") toggleCapture();
+  else if (k === "Escape") { post({ type: "quit" }); return; }
+  else return;
+  e.preventDefault(); save(false);
+});
+</script>
